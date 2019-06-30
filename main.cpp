@@ -5,6 +5,7 @@
 #include "config.h"
 #include "domain.h"
 #include "parse_cmd_line.h"
+#include "general_kernels.h"
 
 void construct_domain( std::string config_or_h5_file,
 		       Domain **dom,
@@ -16,6 +17,8 @@ void extract_filename_prefix_and_suffix_from_h5filename( std::string h5_file,
 
 int main( int argc, char *argv[] )
 {
+    initKernels();
+
     std::string config_or_h5_file;
     parse_cmd_line( argc, argv, config_or_h5_file );
 
@@ -31,6 +34,9 @@ int main( int argc, char *argv[] )
     
     // finalize_whatever_left
     delete dom;
+
+    destroyKernels();
+
     return 0;
 }
 

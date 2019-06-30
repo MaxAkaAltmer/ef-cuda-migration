@@ -1,4 +1,6 @@
 #include "field_solver.h"
+#define _USE_MATH_DEFINES
+#include <math.h>
 
 Field_solver::Field_solver( Spatial_mesh &spat_mesh,
                             Inner_regions_manager &inner_regions )
@@ -9,6 +11,11 @@ Field_solver::Field_solver( Spatial_mesh &spat_mesh,
     dx = spat_mesh.x_cell_size;
     dy = spat_mesh.y_cell_size;
     dz = spat_mesh.z_cell_size;
+
+    phi_cuda_buffer = allocDevMemory(nx*ny*nz*sizeof(double));
+    phi_cuda_buffer_next = allocDevMemory(nx*ny*nz*sizeof(double));
+    electric_field_cuda_buffer = allocDevMemory(nx*ny*nz*sizeof(double)*3);
+    charge_density_cuda_buffer = allocDevMemory(nx*ny*nz*sizeof(double));
 
     allocate_current_next_phi();
 }
@@ -89,6 +96,25 @@ void Field_solver::set_phi_next_at_boundaries()
 
 void Field_solver::compute_phi_next_at_inner_points( Spatial_mesh &spat_mesh )
 {
+#ifdef ENABLE_CUDA_CALCULATIONS
+    copyToDevMemory(phi_cuda_buffer,phi_current.data(),nx*ny*nz*sizeof(double));
+    copyToDevMemory(charge_density_cuda_buffer,spat_mesh.charge_density.data(),nx*ny*nz*sizeof(double));
+
+    run_kernel_field_solver_compute_phi_next_at_inner_points(
+            nx,
+            ny,
+            nz,
+            dx,
+            dy,
+            dz,
+            (double*)charge_density_cuda_buffer,
+            (double*)phi_cuda_buffer,
+            (double*)phi_cuda_buffer_next );
+
+    copyToHostMemory(phi_next.data(),phi_cuda_buffer_next,nx*ny*nz*sizeof(double));
+    return;
+#endif
+
     double dxdxdydy = dx * dx * dy * dy;
     double dxdxdzdz = dx * dx * dz * dz;
     double dydydzdz = dy * dy * dz * dz;
@@ -178,6 +204,22 @@ void Field_solver::eval_fields_from_potential( Spatial_mesh &spat_mesh )
     boost::multi_array<double, 3> &phi = spat_mesh.potential;
     double ex, ey, ez;
     //
+
+#ifdef ENABLE_CUDA_CALCULATIONS
+    copyToDevMemory(phi_cuda_buffer,phi.data(),nx*ny*nz*sizeof(double));
+    run_kernel_field_solver_eval_fields_from_potential(
+            nx,
+            ny,
+            nz,
+            dx,
+            dy,
+            dz,
+            (double*)phi_cuda_buffer,
+            (double*)electric_field_cuda_buffer);
+    copyToHostMemory(spat_mesh.electric_field.data(),electric_field_cuda_buffer,nx*ny*nz*sizeof(double)*3);
+    return;
+#endif
+
     for ( int i = 0; i < nx; i++ ) {
         for ( int j = 0; j < ny; j++ ) {
             for ( int k = 0; k < nz; k++ ) {
@@ -226,5 +268,10 @@ double Field_solver::boundary_difference( double phi1, double phi2, double dx )
 
 Field_solver::~Field_solver()
 {
+    freeDevMemory(phi_cuda_buffer);
+    freeDevMemory(phi_cuda_buffer_next);
+    freeDevMemory(electric_field_cuda_buffer);
+    freeDevMemory(charge_density_cuda_buffer);
+
     // delete phi arrays?
 }

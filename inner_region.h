@@ -390,18 +390,19 @@ public:
 	herr_t err;
 	int otype;
 	size_t MAX_NAME = 1024;
-	char memb_name_cstr[MAX_NAME];
+    std::vector<char> memb_name_cstr(MAX_NAME);
 	hid_t current_ir_grpid;
 	err = H5Gget_num_objs(h5_inner_region_group, &nobj);
 
-	for( hsize_t i = 0; i < nobj; i++ ){
+    for( hsize_t i = 0; i < nobj; i++ )
+    {
 	    len = H5Gget_objname_by_idx(h5_inner_region_group, i, 
-					memb_name_cstr, MAX_NAME );
+                    memb_name_cstr.data(), MAX_NAME );
 	    hdf5_status_check( len );
 	    otype = H5Gget_objtype_by_idx( h5_inner_region_group, i );
 	    if ( otype == H5G_GROUP ) {
 		current_ir_grpid = H5Gopen( h5_inner_region_group,
-					    memb_name_cstr, H5P_DEFAULT );
+                        memb_name_cstr.data(), H5P_DEFAULT );
 		parse_hdf5_inner_reg( current_ir_grpid, spat_mesh );
 		err = H5Gclose( current_ir_grpid );
 		hdf5_status_check( err );

@@ -6,7 +6,9 @@
 #include <vector>
 #include "spatial_mesh.h"
 #include "inner_region.h"
+#include "general_kernels.h"
 
+#define ENABLE_CUDA_CALCULATIONS
 
 class Field_solver {
   public:
@@ -18,6 +20,14 @@ class Field_solver {
     int nx, ny, nz;
     double dx, dy, dz;
   private:
+
+    //CUDA stuff
+    void *phi_cuda_buffer;
+    void *phi_cuda_buffer_next;
+    void *electric_field_cuda_buffer;
+    void *charge_density_cuda_buffer;
+
+    //CPU stuff
     int max_Jacobi_iterations;
     double rel_tolerance;
     double abs_tolerance;

@@ -219,7 +219,7 @@ Vec3d Domain::compute_electric_field_at_particle_position(
         total_el_field = vec3d_add( total_el_field, ext_el_field );
     }
     if ( particle_interaction_model.noninteracting ){
-        if ( inner_regs or gradient ){
+        if ( inner_regs || gradient ){
             mesh_el_field = particle_to_mesh_map.field_at_particle_position(
                 spat_mesh, particle);
             total_el_field = vec3d_add( total_el_field, mesh_el_field );
@@ -228,7 +228,7 @@ Vec3d Domain::compute_electric_field_at_particle_position(
         bin_el_field = binary_field_at_particle_position(
             particle, particle_idx, source_idx);
         total_el_field = vec3d_add( total_el_field, bin_el_field );
-        if ( inner_regs or gradient ){
+        if ( inner_regs || gradient ){
             mesh_el_field = particle_to_mesh_map.field_at_particle_position(
                 spat_mesh, particle);
             total_el_field = vec3d_add( total_el_field, mesh_el_field );

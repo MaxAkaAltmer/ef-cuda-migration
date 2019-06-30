@@ -2,13 +2,17 @@
 
 Vec3d vec3d_init( double x, double y, double z )
 {
-    Vec3d v = { .x = {x,y,z} };
+    Vec3d v;
+    v.x[0] = x;
+    v.x[1] = y;
+    v.x[2] = z;
     return v;
 }
 
 Vec3d vec3d_zero()
 {
-    Vec3d v = { .x = {0.0, 0.0, 0.0} };
+    Vec3d v;
+    v.x[0] = v.x[1] = v.x[2] = 0.0;
     return v;
 }
 

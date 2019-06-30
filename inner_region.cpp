@@ -1,4 +1,6 @@
 #include "inner_region.h"
+#define _USE_MATH_DEFINES
+#include <math.h>
 
 Inner_region::Inner_region( Config &conf,
                             Inner_region_config_part &inner_region_conf )

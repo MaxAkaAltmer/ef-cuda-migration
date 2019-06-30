@@ -1,4 +1,6 @@
 #include "particle_source.h"
+#define _USE_MATH_DEFINES
+#include <math.h>
 
 void check_and_warn_if_not( const bool &should_be, const std::string &message );
 void check_and_exit_if_not( const bool &should_be, const std::string &message );
@@ -257,17 +259,27 @@ Vec3d Particle_source::maxwell_momentum_distr(
     double maxwell_gauss_std_mean_y = vec3d_y( mean_momentum );
     double maxwell_gauss_std_mean_z = vec3d_z( mean_momentum );
     double maxwell_gauss_std_dev = sqrt( mass * temperature );
-    std::normal_distribution<double> 
-	normal_distr_x( maxwell_gauss_std_mean_x, maxwell_gauss_std_dev );
-    std::normal_distribution<double> 
-	normal_distr_y( maxwell_gauss_std_mean_y, maxwell_gauss_std_dev );
-    std::normal_distribution<double> 
-	normal_distr_z( maxwell_gauss_std_mean_z, maxwell_gauss_std_dev );
 
     Vec3d mom;
-    mom = vec3d_init( normal_distr_x( rnd_gen ),
-		      normal_distr_y( rnd_gen ),
-		      normal_distr_z( rnd_gen ) );		     
+    if( maxwell_gauss_std_dev> 0.0 )
+    {
+        std::normal_distribution<double>
+        normal_distr_x( maxwell_gauss_std_mean_x, maxwell_gauss_std_dev );
+        std::normal_distribution<double>
+        normal_distr_y( maxwell_gauss_std_mean_y, maxwell_gauss_std_dev );
+        std::normal_distribution<double>
+        normal_distr_z( maxwell_gauss_std_mean_z, maxwell_gauss_std_dev );
+
+        mom = vec3d_init( normal_distr_x( rnd_gen ),
+                  normal_distr_y( rnd_gen ),
+                  normal_distr_z( rnd_gen ) );
+    }
+    else
+    {
+        mom = vec3d_init( maxwell_gauss_std_mean_x,
+                  maxwell_gauss_std_mean_y,
+                  maxwell_gauss_std_mean_z );
+    }
     mom = vec3d_times_scalar( mom, 1.0 ); // recheck
     return mom;
 }
@@ -317,10 +329,10 @@ void Particle_source::write_hdf5_particles( hid_t current_source_group_id )
     hid_t filespace, memspace, dset;
     hid_t plist_id;
     int rank = 1;
-    hsize_t dims[rank];
+    std::vector<hsize_t> dims(rank);
     dims[0] = particles.size();
     
-    filespace = H5Screate_simple( rank, dims, NULL );
+    filespace = H5Screate_simple( rank, dims.data(), NULL );
     memspace = H5S_ALL;
     plist_id = H5P_DEFAULT;
     

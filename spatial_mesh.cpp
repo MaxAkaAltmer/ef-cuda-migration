@@ -337,10 +337,10 @@ void Spatial_mesh::write_hdf5_ongrid_values( hid_t group_id )
     hid_t filespace, dset;
     herr_t status;
     int rank = 1;
-    hsize_t dims[rank];
+    std::vector<hsize_t> dims(rank);
     dims[0] = node_coordinates.num_elements();
 
-    filespace = H5Screate_simple( rank, dims, NULL );
+    filespace = H5Screate_simple( rank, dims.data(), NULL );
     
     // todo: without compound datasets
     // there is this copying problem.
