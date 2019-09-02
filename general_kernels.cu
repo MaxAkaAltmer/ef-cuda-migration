@@ -2,6 +2,7 @@
 #include <cuda_runtime.h>
 #include <assert.h>
 #include <iostream>
+#include <vector>
 #include <math.h>
 
 void initKernels()
@@ -26,12 +27,14 @@ void destroyKernels()
 void* allocDevMemory(size_t size)
 {
     void *mem;
+    if(!size) return nullptr;
     assert(cudaMalloc(&mem,size) == cudaSuccess);
     return mem;
 }
 
 void freeDevMemory(void *mem)
 {
+    if(!mem) return;
     assert(cudaStreamSynchronize(0) == cudaSuccess);
     assert(cudaFree(mem) == cudaSuccess);
 }
@@ -39,6 +42,11 @@ void freeDevMemory(void *mem)
 void copyToDevMemory(void *dst, void *src, size_t size)
 {
     assert(cudaMemcpy(dst,src,size,cudaMemcpyHostToDevice) == cudaSuccess);
+    assert(cudaStreamSynchronize(0) == cudaSuccess);
+}
+
+void synchronize()
+{
     assert(cudaStreamSynchronize(0) == cudaSuccess);
 }
 
@@ -218,3 +226,169 @@ void run_kernel_field_solver_compute_phi_next_at_inner_points(
     assert(cudaGetLastError() == cudaSuccess);
 }
 
+static __global__ void kernel_field_solver_set_phi_next_at_boundaries_ny_nz(
+        int nx,
+        int ny,
+        int nz,
+        const double *phi_current,
+        double *phi_next)
+{
+    int j = blockIdx.x*blockDim.x+threadIdx.x;
+    int k = blockIdx.y*blockDim.y+threadIdx.y;
+
+    if(j>=ny || k>nz) return;
+
+    phi_next[ceil_index(ny,nz,0,j,k)] = phi_current[ceil_index(ny,nz,0,j,k)];
+    phi_next[ceil_index(ny,nz,nx-1,j,k)] = phi_current[ceil_index(ny,nz,nx-1,j,k)];
+}
+
+static __global__ void kernel_field_solver_set_phi_next_at_boundaries_nx_nz(
+        int nx,
+        int ny,
+        int nz,
+        const double *phi_current,
+        double *phi_next)
+{
+    int i = blockIdx.x*blockDim.x+threadIdx.x;
+    int k = blockIdx.y*blockDim.y+threadIdx.y;
+
+    if(i>=nx || k>nz) return;
+
+    phi_next[ceil_index(ny,nz,i,0,k)] = phi_current[ceil_index(ny,nz,i,0,k)];
+    phi_next[ceil_index(ny,nz,i,ny-1,k)] = phi_current[ceil_index(ny,nz,i,ny-1,k)];
+}
+
+static __global__ void kernel_field_solver_set_phi_next_at_boundaries_nx_ny(
+        int nx,
+        int ny,
+        int nz,
+        const double *phi_current,
+        double *phi_next)
+{
+    int i = blockIdx.x*blockDim.x+threadIdx.x;
+    int j = blockIdx.y*blockDim.y+threadIdx.y;
+
+    if(i>=nx || j>=ny) return;
+
+    phi_next[ceil_index(ny,nz,i,j,0)] = phi_current[ceil_index(ny,nz,i,j,0)];
+    phi_next[ceil_index(ny,nz,i,j,nz-1)] = phi_current[ceil_index(ny,nz,i,j,nz-1)];
+}
+
+void run_kernel_field_solver_set_phi_next_at_boundaries(int nx,
+                                                        int ny,
+                                                        int nz,
+                                                        const double *phi_current,
+                                                        double *phi_next)
+{
+    dim3 block(16,16);
+    dim3 grid((ny+15)/16,(nz+15)/16);
+    kernel_field_solver_set_phi_next_at_boundaries_ny_nz<<<grid,block>>>(nx,ny,nz,phi_current,phi_next);
+    assert(cudaGetLastError() == cudaSuccess);
+
+    grid = dim3((nx+15)/16,(nz+15)/16);
+    kernel_field_solver_set_phi_next_at_boundaries_nx_nz<<<grid,block>>>(nx,ny,nz,phi_current,phi_next);
+    assert(cudaGetLastError() == cudaSuccess);
+
+    grid = dim3((nx+15)/16,(ny+15)/16);
+    kernel_field_solver_set_phi_next_at_boundaries_nx_ny<<<grid,block>>>(nx,ny,nz,phi_current,phi_next);
+    assert(cudaGetLastError() == cudaSuccess);
+}
+
+static __global__ void kernel_field_solver_set_phi_next_at_inner_regions(
+        const int *nodes,
+        double *phi_next,
+        int reg_count,
+        int nx,
+        int ny,
+        int nz,
+        const double *potential)
+{
+    int i = blockIdx.x*blockDim.x+threadIdx.x;
+
+    if(reg_count <= i) return;
+
+    // todo: mark nodes at edge during construction
+    // if (!node.at_domain_edge( nx, ny, nz )) {
+    phi_next[ceil_index(ny,nz,nodes[i*3],nodes[i*3+1],nodes[i*3+2])] = potential[i];
+    // }
+}
+
+void run_kernel_field_solver_set_phi_next_at_inner_regions(
+        const int *nodes,
+        double *phi_next,
+        int reg_count,
+        int nx,
+        int ny,
+        int nz,
+        const double *potential)
+{
+    dim3 block(256);
+    dim3 grid((reg_count+255)/256);
+
+    kernel_field_solver_set_phi_next_at_inner_regions<<<grid,block>>>(nodes,phi_next,reg_count,nx,ny,nz,potential);
+    assert(cudaGetLastError() == cudaSuccess);
+}
+
+static __global__ void kernel_feld_solver_iterative_Jacobi_solutions_converged(
+        const double *phi_current,
+        const double *phi_next,
+        double *diff,
+        double *rel_diff,
+        int nx,
+        int ny,
+        int nz)
+{
+    int i = blockIdx.x*blockDim.x+threadIdx.x;
+    int j = blockIdx.y*blockDim.y+threadIdx.y;
+
+    if(i>=nx || j>=ny) return;
+
+    for ( int k = 0; k < nz; k++ )
+    {
+        double d = abs( phi_next[ceil_index(ny,nz,i,j,k)] - phi_current[ceil_index(ny,nz,i,j,k)] );
+        double rd = d / abs( phi_current[ceil_index(ny,nz,i,j,k)] );
+        if(!k || d>diff[k]) diff[k] = d;
+        if(!k || rd>rel_diff[k]) rel_diff[k] = rd;
+    }
+}
+
+bool run_field_solver_iterative_Jacobi_solutions_converged(
+        const double *phi_current,
+        const double *phi_next,
+        double *diff,
+        double *rel_diff,
+        int nx,
+        int ny,
+        int nz)
+{
+    // todo: bind tol to config parameters
+    //abs_tolerance = std::max( dx * dx, std::max( dy * dy, dz * dz ) ) / 5;
+    double abs_tolerance = 1.0e-5;
+    double rel_tolerance = 1.0e-12;
+    //double tol;
+    //
+
+    return false;
+
+    dim3 block(16,16);
+    dim3 grid((nx+15)/16,(ny+15)/16);
+
+    kernel_feld_solver_iterative_Jacobi_solutions_converged <<<grid,block>>> (phi_current, phi_next, diff, rel_diff, nx, ny, nz);
+    assert(cudaGetLastError() == cudaSuccess);
+
+    std::vector<double> maximum_diff, maximum_rel_diff;
+    maximum_diff.resize(nz);
+    maximum_rel_diff.resize(nz);
+
+    copyToHostMemory(maximum_diff.data(), diff, sizeof(double)*nz);
+    copyToHostMemory(maximum_rel_diff.data(), rel_diff, sizeof(double)*nz);
+
+    for(int i=0;i<nz;i++)
+    {
+        if ( maximum_diff[i] > abs_tolerance || maximum_rel_diff[i] > rel_tolerance ){
+            return false;
+        }
+    }
+
+    return true;
+}

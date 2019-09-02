@@ -12,10 +12,16 @@ Field_solver::Field_solver( Spatial_mesh &spat_mesh,
     dy = spat_mesh.y_cell_size;
     dz = spat_mesh.z_cell_size;
 
-    phi_cuda_buffer = allocDevMemory(nx*ny*nz*sizeof(double));
+    phi_cuda_buffer_current = allocDevMemory(nx*ny*nz*sizeof(double));
     phi_cuda_buffer_next = allocDevMemory(nx*ny*nz*sizeof(double));
     electric_field_cuda_buffer = allocDevMemory(nx*ny*nz*sizeof(double)*3);
     charge_density_cuda_buffer = allocDevMemory(nx*ny*nz*sizeof(double));
+    diff_cuda_buffer = allocDevMemory(nz*sizeof(double));
+    diff_cuda_buffer_rel = allocDevMemory(nz*sizeof(double));
+
+    reg_counter_cuda = 0;
+    nodes_array_cuda = nullptr;
+    potential_array_cuda = nullptr;
 
     allocate_current_next_phi();
 }
@@ -29,7 +35,102 @@ void Field_solver::allocate_current_next_phi()
 void Field_solver::eval_potential( Spatial_mesh &spat_mesh,
                                    Inner_regions_manager &inner_regions )
 {
+#ifdef ENABLE_CUDA_CALCULATIONS
+    solve_poisson_eqn_Jacobi_cuda( spat_mesh, inner_regions );
+#else
     solve_poisson_eqn_Jacobi( spat_mesh, inner_regions );
+#endif
+}
+
+void Field_solver::solve_poisson_eqn_Jacobi_cuda( Spatial_mesh &spat_mesh,
+                                             Inner_regions_manager &inner_regions )
+{
+    max_Jacobi_iterations = 2000;
+    int iter;
+
+    size_t mem_size = size_t(nx)*size_t(ny)*size_t(nz)*sizeof(double);
+    copyToDevMemory(phi_cuda_buffer_current,spat_mesh.potential.data(), mem_size);
+    copyToDevMemory(charge_density_cuda_buffer,spat_mesh.charge_density.data(),mem_size);
+
+    std::vector<int> temp_regions;
+    std::vector<double> temp_potential;
+    for( auto &reg : inner_regions.regions ){
+        for( auto &node : reg.inner_nodes ){
+            // todo: mark nodes at edge during construction
+            // if (!node.at_domain_edge( nx, ny, nz )) {
+            temp_regions.push_back(node.x);
+            temp_regions.push_back(node.y);
+            temp_regions.push_back(node.z);
+            temp_potential.push_back(reg.potential);
+            // }
+        }
+    }
+
+    if(reg_counter_cuda < temp_potential.size())
+    {
+        if(nodes_array_cuda)
+            freeDevMemory(nodes_array_cuda);
+        if(potential_array_cuda)
+            freeDevMemory(potential_array_cuda);
+
+        reg_counter_cuda = temp_potential.size();
+        nodes_array_cuda = allocDevMemory(temp_regions.size()*sizeof(int));
+        potential_array_cuda = allocDevMemory(temp_potential.size()*sizeof(double));
+    }
+
+    if(temp_potential.size())
+    {
+        copyToDevMemory(nodes_array_cuda, temp_regions.data(), temp_regions.size()*sizeof(int));
+        copyToDevMemory(potential_array_cuda, temp_potential.data(), temp_potential.size()*sizeof(double));
+    }
+
+    for( iter = 0; iter < max_Jacobi_iterations; ++iter )
+    {
+        run_kernel_field_solver_set_phi_next_at_boundaries(
+                nx, ny, nz,
+                reinterpret_cast<double*>(phi_cuda_buffer_current),
+                reinterpret_cast<double*>(phi_cuda_buffer_next) );
+
+        run_kernel_field_solver_compute_phi_next_at_inner_points(
+                nx, ny, nz,
+                dx, dy, dz,
+                reinterpret_cast<double*>(charge_density_cuda_buffer),
+                reinterpret_cast<double*>(phi_cuda_buffer_current),
+                reinterpret_cast<double*>(phi_cuda_buffer_next) );
+
+        if(temp_potential.size())
+        {
+            run_kernel_field_solver_set_phi_next_at_inner_regions(
+                    reinterpret_cast<int*>(nodes_array_cuda),
+                    reinterpret_cast<double*>(phi_cuda_buffer_next),
+                    reg_counter_cuda,
+                    nx, ny, nz,
+                    reinterpret_cast<double*>(potential_array_cuda));
+        }
+
+        bool sol = run_field_solver_iterative_Jacobi_solutions_converged(
+                reinterpret_cast<double*>(phi_cuda_buffer_current),
+                reinterpret_cast<double*>(phi_cuda_buffer_next),
+                reinterpret_cast<double*>(diff_cuda_buffer),
+                reinterpret_cast<double*>(diff_cuda_buffer_rel),
+                nx, ny, nz);
+
+        if ( sol )
+        {
+            break;
+        }
+
+        std::swap( phi_cuda_buffer_current, phi_cuda_buffer_next );
+    }
+
+    if ( iter == max_Jacobi_iterations ){
+        printf("WARING: potential evaluation did't converge after max iterations!\n");
+    }
+
+    //похоже здесь ошибка (я следовал оригиналу) - мы должны брать текущий из-за свапа
+    copyToHostMemory(spat_mesh.potential.data(), phi_cuda_buffer_next, mem_size);
+
+    return;
 }
 
 void Field_solver::solve_poisson_eqn_Jacobi( Spatial_mesh &spat_mesh,
@@ -96,25 +197,6 @@ void Field_solver::set_phi_next_at_boundaries()
 
 void Field_solver::compute_phi_next_at_inner_points( Spatial_mesh &spat_mesh )
 {
-#ifdef ENABLE_CUDA_CALCULATIONS
-    copyToDevMemory(phi_cuda_buffer,phi_current.data(),nx*ny*nz*sizeof(double));
-    copyToDevMemory(charge_density_cuda_buffer,spat_mesh.charge_density.data(),nx*ny*nz*sizeof(double));
-
-    run_kernel_field_solver_compute_phi_next_at_inner_points(
-            nx,
-            ny,
-            nz,
-            dx,
-            dy,
-            dz,
-            (double*)charge_density_cuda_buffer,
-            (double*)phi_cuda_buffer,
-            (double*)phi_cuda_buffer_next );
-
-    copyToHostMemory(phi_next.data(),phi_cuda_buffer_next,nx*ny*nz*sizeof(double));
-    return;
-#endif
-
     double dxdxdydy = dx * dx * dy * dy;
     double dxdxdzdz = dx * dx * dz * dz;
     double dydydzdz = dy * dy * dz * dz;
@@ -184,6 +266,7 @@ void Field_solver::set_phi_next_as_phi_current()
     // would result in copy.
     // Hopefully, it could be avoided with std::swap
     std::swap( phi_current, phi_next );
+
 }
 
 void Field_solver::transfer_solution_to_spat_mesh( Spatial_mesh &spat_mesh )
@@ -206,7 +289,7 @@ void Field_solver::eval_fields_from_potential( Spatial_mesh &spat_mesh )
     //
 
 #ifdef ENABLE_CUDA_CALCULATIONS
-    copyToDevMemory(phi_cuda_buffer,phi.data(),nx*ny*nz*sizeof(double));
+    copyToDevMemory(phi_cuda_buffer_current,phi.data(),nx*ny*nz*sizeof(double));
     run_kernel_field_solver_eval_fields_from_potential(
             nx,
             ny,
@@ -214,7 +297,7 @@ void Field_solver::eval_fields_from_potential( Spatial_mesh &spat_mesh )
             dx,
             dy,
             dz,
-            (double*)phi_cuda_buffer,
+            (double*)phi_cuda_buffer_current,
             (double*)electric_field_cuda_buffer);
     copyToHostMemory(spat_mesh.electric_field.data(),electric_field_cuda_buffer,nx*ny*nz*sizeof(double)*3);
     return;
@@ -268,10 +351,15 @@ double Field_solver::boundary_difference( double phi1, double phi2, double dx )
 
 Field_solver::~Field_solver()
 {
-    freeDevMemory(phi_cuda_buffer);
+    freeDevMemory(phi_cuda_buffer_current);
     freeDevMemory(phi_cuda_buffer_next);
     freeDevMemory(electric_field_cuda_buffer);
     freeDevMemory(charge_density_cuda_buffer);
+    freeDevMemory(diff_cuda_buffer);
+    freeDevMemory(diff_cuda_buffer_rel);
+
+    freeDevMemory(nodes_array_cuda);
+    freeDevMemory(potential_array_cuda);
 
     // delete phi arrays?
 }

@@ -22,10 +22,18 @@ class Field_solver {
   private:
 
     //CUDA stuff
-    void *phi_cuda_buffer;
+    void *phi_cuda_buffer_current;
     void *phi_cuda_buffer_next;
     void *electric_field_cuda_buffer;
     void *charge_density_cuda_buffer;
+    void *diff_cuda_buffer;
+    void *diff_cuda_buffer_rel;
+    int reg_counter_cuda;
+    void *nodes_array_cuda;
+    void *potential_array_cuda;
+
+    void solve_poisson_eqn_Jacobi_cuda( Spatial_mesh &spat_mesh,
+                   Inner_regions_manager &inner_regions );
 
     //CPU stuff
     int max_Jacobi_iterations;

@@ -9,6 +9,8 @@ void freeDevMemory(void *mem);
 void copyToDevMemory(void *dst, void *src, size_t size);
 void copyToHostMemory(void *dst, void *src, size_t size);
 
+void synchronize();
+
 void run_kernel_field_solver_eval_fields_from_potential(
         int spat_mesh_x_n_nodes,
         int spat_mesh_y_n_nodes,
@@ -29,5 +31,30 @@ void run_kernel_field_solver_compute_phi_next_at_inner_points(
         const double *spat_mesh_charge_density,
         const double *phi_current,
         double *phi_next );
+
+void run_kernel_field_solver_set_phi_next_at_boundaries(
+        int nx,
+        int ny,
+        int nz,
+        const double *phi_current,
+        double *phi_nextm );
+
+void run_kernel_field_solver_set_phi_next_at_inner_regions(
+        const int *nodes,
+        double *phi_next,
+        int reg_count,
+        int nx,
+        int ny,
+        int nz,
+        const double *potential);
+
+bool run_field_solver_iterative_Jacobi_solutions_converged(
+        const double *phi_current,
+        const double *phi_next,
+        double *diff,
+        double *rel_diff,
+        int nx,
+        int ny,
+        int nz);
 
 #endif // GENERAL_KERNELS_H
