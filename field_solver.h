@@ -8,8 +8,6 @@
 #include "inner_region.h"
 #include "general_kernels.h"
 
-#define ENABLE_CUDA_CALCULATIONS
-
 class Field_solver {
   public:
     Field_solver( Spatial_mesh &spat_mesh, Inner_regions_manager &inner_regions );

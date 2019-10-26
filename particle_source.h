@@ -16,6 +16,8 @@
 #include "particle.h"
 #include "vec3d.h"
 
+#include "general_kernels.h"
+
 class Particle_source{
 public:
     std::string name;
@@ -235,131 +237,167 @@ private:
 class Particle_sources_manager{
 public:
     boost::ptr_vector<Particle_source> sources;
+
+    void* getCudaSourcesChargeNPos(size_t &size)
+    {
+        std::vector<double> buffer;
+        for( auto& part_src: sources ) {
+            for( auto& p : part_src.particles ) {
+                buffer.push_back(p.charge);
+                buffer.push_back(p.position.x[0]);
+                buffer.push_back(p.position.x[1]);
+                buffer.push_back(p.position.x[2]);
+            }
+        }
+        if(cuda_particle_charge_n_pos_size < buffer.size())
+        {
+            if(cuda_particle_charge_n_pos)
+                freeDevMemory(cuda_particle_charge_n_pos);
+            cuda_particle_charge_n_pos = allocDevMemory(buffer.size()*sizeof(double));
+            cuda_particle_charge_n_pos_size = buffer.size();
+        }
+
+        copyToDevMemory(cuda_particle_charge_n_pos,buffer.data(),buffer.size()*sizeof(double));
+
+        size = buffer.size()/4;
+        return cuda_particle_charge_n_pos;
+    }
+
 public:
     Particle_sources_manager( Config &conf )
     {
-	for( auto &src_conf : conf.sources_config_part ){
-	    if( Particle_source_box_config_part *box_conf =
-		dynamic_cast<Particle_source_box_config_part*>( &src_conf ) ){
-		sources.push_back( new Particle_source_box( conf,
-							    *box_conf ) );
-	    } else if( Particle_source_cylinder_config_part *cyl_conf =
-	    	       dynamic_cast<Particle_source_cylinder_config_part*>( &src_conf ) ){
-	    	sources.push_back( new Particle_source_cylinder( conf,
-	    							 *cyl_conf ) );
-	    } else if( Particle_source_tube_along_z_config_part *tube_along_z_conf =
-	    	       dynamic_cast<Particle_source_tube_along_z_config_part*>(&src_conf)){
-	    	sources.push_back( new Particle_source_tube_along_z( conf,
-								     *tube_along_z_conf));
-	    } else {
-		std::cout << "In sources_manager constructor: " 
-			  << "Unknown config type. Aborting" << std::endl; 
-		exit( EXIT_FAILURE );
-	    }
-	}
+        for( auto &src_conf : conf.sources_config_part ){
+            if( Particle_source_box_config_part *box_conf =
+            dynamic_cast<Particle_source_box_config_part*>( &src_conf ) ){
+            sources.push_back( new Particle_source_box( conf,
+                                    *box_conf ) );
+            } else if( Particle_source_cylinder_config_part *cyl_conf =
+                       dynamic_cast<Particle_source_cylinder_config_part*>( &src_conf ) ){
+                sources.push_back( new Particle_source_cylinder( conf,
+                                         *cyl_conf ) );
+            } else if( Particle_source_tube_along_z_config_part *tube_along_z_conf =
+                       dynamic_cast<Particle_source_tube_along_z_config_part*>(&src_conf)){
+                sources.push_back( new Particle_source_tube_along_z( conf,
+                                         *tube_along_z_conf));
+            } else {
+            std::cout << "In sources_manager constructor: "
+                  << "Unknown config type. Aborting" << std::endl;
+            exit( EXIT_FAILURE );
+            }
+        }
     }
 
     Particle_sources_manager( hid_t h5_particle_sources_group )
     {
-	hsize_t nobj;
-	ssize_t len;
-	herr_t err;
-	int otype;
-	size_t MAX_NAME = 1024;
-    std::vector<char> memb_name_cstr(MAX_NAME);
-	hid_t current_src_grpid;
-	err = H5Gget_num_objs(h5_particle_sources_group, &nobj);
+        hsize_t nobj;
+        ssize_t len;
+        herr_t err;
+        int otype;
+        size_t MAX_NAME = 1024;
+        std::vector<char> memb_name_cstr(MAX_NAME);
+        hid_t current_src_grpid;
+        err = H5Gget_num_objs(h5_particle_sources_group, &nobj);
 
-	for( hsize_t i = 0; i < nobj; i++ ){
-	    len = H5Gget_objname_by_idx( h5_particle_sources_group, i, 
-                     memb_name_cstr.data(), MAX_NAME );
-	    hdf5_status_check( len );
-	    otype = H5Gget_objtype_by_idx( h5_particle_sources_group, i );
-	    if ( otype == H5G_GROUP ) {
-		current_src_grpid = H5Gopen( h5_particle_sources_group,
-                         memb_name_cstr.data(), H5P_DEFAULT );
-		parse_hdf5_particle_source( current_src_grpid );
-		err = H5Gclose( current_src_grpid ); hdf5_status_check( err );
-	    }		
-	}
+        for( hsize_t i = 0; i < nobj; i++ ){
+            len = H5Gget_objname_by_idx( h5_particle_sources_group, i,
+                         memb_name_cstr.data(), MAX_NAME );
+            hdf5_status_check( len );
+            otype = H5Gget_objtype_by_idx( h5_particle_sources_group, i );
+            if ( otype == H5G_GROUP ) {
+            current_src_grpid = H5Gopen( h5_particle_sources_group,
+                             memb_name_cstr.data(), H5P_DEFAULT );
+            parse_hdf5_particle_source( current_src_grpid );
+            err = H5Gclose( current_src_grpid ); hdf5_status_check( err );
+            }
+        }
     }
 
     void parse_hdf5_particle_source( hid_t current_src_grpid )
     {
-	herr_t status;
-	char geometry_type_cstr[50];
-	status = H5LTget_attribute_string( current_src_grpid, "./",
-					   "geometry_type", geometry_type_cstr );
-	hdf5_status_check( status );
+        herr_t status;
+        char geometry_type_cstr[50];
+        status = H5LTget_attribute_string( current_src_grpid, "./",
+                           "geometry_type", geometry_type_cstr );
+        hdf5_status_check( status );
 
-	std::string geometry_type( geometry_type_cstr );
-	if( geometry_type == "box" ){
-	    sources.push_back( new Particle_source_box( current_src_grpid ) );
-	} else if ( geometry_type == "cylinder" ) {
-	    sources.push_back( new Particle_source_cylinder( current_src_grpid ) );
-	} else if ( geometry_type == "tube_along_z" ) {
-	    sources.push_back( new Particle_source_tube_along_z( current_src_grpid ) );
-	} else {
-	    std::cout << "In Particle_source_manager constructor-from-h5: "
-		      << "Unknown particle_source type. Aborting"
-		      << std::endl;
-	    exit( EXIT_FAILURE );
-	}	
+        std::string geometry_type( geometry_type_cstr );
+        if( geometry_type == "box" ){
+            sources.push_back( new Particle_source_box( current_src_grpid ) );
+        } else if ( geometry_type == "cylinder" ) {
+            sources.push_back( new Particle_source_cylinder( current_src_grpid ) );
+        } else if ( geometry_type == "tube_along_z" ) {
+            sources.push_back( new Particle_source_tube_along_z( current_src_grpid ) );
+        } else {
+            std::cout << "In Particle_source_manager constructor-from-h5: "
+                  << "Unknown particle_source type. Aborting"
+                  << std::endl;
+            exit( EXIT_FAILURE );
+        }
     }
     
-    virtual ~Particle_sources_manager() {};
+    virtual ~Particle_sources_manager()
+    {
+        if(cuda_particle_charge_n_pos)
+            freeDevMemory(cuda_particle_charge_n_pos);
+    }
 
     void write_to_file( hid_t hdf5_file_id )
     {
-	hid_t group_id;
-	herr_t status;
-	int single_element = 1;
-	std::string hdf5_groupname = "/ParticleSources";
-	int n_of_sources = sources.size();
-	group_id = H5Gcreate2( hdf5_file_id, hdf5_groupname.c_str(),
-			       H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-	hdf5_status_check( group_id );
+        hid_t group_id;
+        herr_t status;
+        int single_element = 1;
+        std::string hdf5_groupname = "/ParticleSources";
+        int n_of_sources = sources.size();
+        group_id = H5Gcreate2( hdf5_file_id, hdf5_groupname.c_str(),
+                       H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+        hdf5_status_check( group_id );
 
-	status = H5LTset_attribute_int( hdf5_file_id,
-					hdf5_groupname.c_str(),
-					"number_of_sources", &n_of_sources,
-					single_element );
-	hdf5_status_check( status );
-	
-	for( auto &src : sources )
-	    src.write_to_file( group_id );
+        status = H5LTset_attribute_int( hdf5_file_id,
+                        hdf5_groupname.c_str(),
+                        "number_of_sources", &n_of_sources,
+                        single_element );
+        hdf5_status_check( status );
 
-	status = H5Gclose( group_id );
-	hdf5_status_check( status );
-    }; 
+        for( auto &src : sources )
+            src.write_to_file( group_id );
+
+        status = H5Gclose( group_id );
+        hdf5_status_check( status );
+    }
 
     void generate_each_step()
     {
 	for( auto &src : sources )
 	    src.generate_each_step();
-    };
+    }
 
     void print_particles()
     {
 	for( auto &src : sources )
 	    src.print_particles();
-    };
+    }
 
     void update_particles_position( double dt )
     {
 	for( auto &src : sources )
 	    src.update_particles_position( dt );
-    };
+    }
 
     void hdf5_status_check( herr_t status )
     {
-	if( status < 0 ){
-	    std::cout << "Something went wrong while writing or reading"
-		      << "'Particle_sources' group. Aborting."
-		      << std::endl;
-	    exit( EXIT_FAILURE );
-	}
-    };
+        if( status < 0 ){
+            std::cout << "Something went wrong while writing or reading"
+                  << "'Particle_sources' group. Aborting."
+                  << std::endl;
+            exit( EXIT_FAILURE );
+        }
+    }
+
+private:
+    //Вообще здесь требуется тотальная декомпозиция данных для оптимизации через GPU
+    void *cuda_particle_charge_n_pos = nullptr;
+    size_t cuda_particle_charge_n_pos_size = 0;
+
 };
 
 

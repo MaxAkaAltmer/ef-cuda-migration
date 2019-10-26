@@ -1,6 +1,8 @@
 #ifndef GENERAL_KERNELS_H
 #define GENERAL_KERNELS_H
 
+#define ENABLE_CUDA_CALCULATIONS
+
 void initKernels();
 void destroyKernels();
 
@@ -56,5 +58,16 @@ bool run_field_solver_iterative_Jacobi_solutions_converged(
         int nx,
         int ny,
         int nz);
+
+bool run_kernel_particle_to_mesh_map_weight_particles_charge_to_mesh(
+        int spat_mesh_x_n_nodes,
+        int spat_mesh_y_n_nodes,
+        int spat_mesh_z_n_nodes,
+        double spat_mesh_x_cell_size,
+        double spat_mesh_y_cell_size,
+        double spat_mesh_z_cell_size,
+        double *spat_mesh_charge_density,
+        const double *sources,
+        int source_size);
 
 #endif // GENERAL_KERNELS_H

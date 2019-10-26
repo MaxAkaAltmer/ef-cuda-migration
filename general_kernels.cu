@@ -71,6 +71,7 @@ static __inline__ __device__ int ceil_index( int ny, int nz, int x, int y, int z
     return x*ny*nz+y*nz+z;
 }
 
+
 static __global__ void kernel_field_solver_eval_fields_from_potential(
         int spat_mesh_x_n_nodes,
         int spat_mesh_y_n_nodes,
@@ -368,8 +369,6 @@ bool run_field_solver_iterative_Jacobi_solutions_converged(
     //double tol;
     //
 
-    return false;
-
     dim3 block(16,16);
     dim3 grid((nx+15)/16,(ny+15)/16);
 
@@ -389,6 +388,107 @@ bool run_field_solver_iterative_Jacobi_solutions_converged(
             return false;
         }
     }
+
+    return true;
+}
+
+// Eval charge density on grid
+static __global__ void kernel_particle_to_mesh_map_weight_particles_charge_to_mesh(
+        int spat_mesh_x_n_nodes,
+        int spat_mesh_y_n_nodes,
+        int spat_mesh_z_n_nodes,
+        double spat_mesh_x_cell_size,
+        double spat_mesh_y_cell_size,
+        double spat_mesh_z_cell_size,
+        double *spat_mesh_charge_density,
+        const double *sources,
+        int source_size)
+{
+
+    int i = blockIdx.x*blockDim.x+threadIdx.x;
+
+    // Rewrite:
+    // forall particles {
+    //   find nonzero weights and corresponding nodes
+    //   charge[node] = weight(particle, node) * particle.charge
+    // }
+    int nx = spat_mesh_x_n_nodes;
+    int ny = spat_mesh_y_n_nodes;
+    int nz = spat_mesh_z_n_nodes;
+    double dx = spat_mesh_x_cell_size;
+    double dy = spat_mesh_y_cell_size;
+    double dz = spat_mesh_z_cell_size;
+    double volume_around_node = dx * dy * dz;
+    int tlf_i, tlf_j, tlf_k; // 'tlf' = 'top_left_far'
+    double tlf_x_weight, tlf_y_weight, tlf_z_weight;
+
+    if(i<source_size)
+    {
+        double x_in_grid_units = sources[i*4+1] / dx;
+        tlf_i = ceil( x_in_grid_units );
+        tlf_x_weight = 1.0 - ( tlf_i - x_in_grid_units );
+
+        double y_in_grid_units = sources[i*4+2] / dy;
+        tlf_j = ceil( y_in_grid_units );
+        tlf_y_weight = 1.0 - ( tlf_j - y_in_grid_units );
+
+        double z_in_grid_units = sources[i*4+3] / dz;
+        tlf_k = ceil( z_in_grid_units );
+        tlf_z_weight = 1.0 - ( tlf_k - z_in_grid_units );
+
+        spat_mesh_charge_density[ceil_index(ny,nz,tlf_i,tlf_j,tlf_k)] +=
+            tlf_x_weight * tlf_y_weight * tlf_z_weight
+            * sources[i*4] / volume_around_node;
+        spat_mesh_charge_density[ceil_index(ny,nz,tlf_i-1,tlf_j,tlf_k)] +=
+            ( 1.0 - tlf_x_weight ) * tlf_y_weight * tlf_z_weight
+            * sources[i*4] / volume_around_node;
+        spat_mesh_charge_density[ceil_index(ny,nz,tlf_i,tlf_j-1,tlf_k)] +=
+            tlf_x_weight * ( 1.0 - tlf_y_weight ) * tlf_z_weight
+            * sources[i*4] / volume_around_node;
+        spat_mesh_charge_density[ceil_index(ny,nz,tlf_i-1,tlf_j-1,tlf_k)] +=
+            ( 1.0 - tlf_x_weight ) * ( 1.0 - tlf_y_weight ) * tlf_z_weight
+            * sources[i*4] / volume_around_node;
+        spat_mesh_charge_density[ceil_index(ny,nz,tlf_i,tlf_j,tlf_k - 1)] +=
+            tlf_x_weight * tlf_y_weight * ( 1.0 - tlf_z_weight )
+            * sources[i*4] / volume_around_node;
+        spat_mesh_charge_density[ceil_index(ny,nz,tlf_i-1,tlf_j,tlf_k - 1)] +=
+            ( 1.0 - tlf_x_weight ) * tlf_y_weight * ( 1.0 - tlf_z_weight )
+            * sources[i*4] / volume_around_node;
+        spat_mesh_charge_density[ceil_index(ny,nz,tlf_i,tlf_j-1,tlf_k - 1)] +=
+            tlf_x_weight * ( 1.0 - tlf_y_weight ) * ( 1.0 - tlf_z_weight )
+            * sources[i*4] / volume_around_node;
+        spat_mesh_charge_density[ceil_index(ny,nz,tlf_i-1,tlf_j-1,tlf_k - 1)] +=
+            ( 1.0 - tlf_x_weight ) * ( 1.0 - tlf_y_weight ) * ( 1.0 - tlf_z_weight )
+            * sources[i*4] / volume_around_node;
+    }
+}
+
+bool run_kernel_particle_to_mesh_map_weight_particles_charge_to_mesh(
+        int spat_mesh_x_n_nodes,
+        int spat_mesh_y_n_nodes,
+        int spat_mesh_z_n_nodes,
+        double spat_mesh_x_cell_size,
+        double spat_mesh_y_cell_size,
+        double spat_mesh_z_cell_size,
+        double *spat_mesh_charge_density,
+        const double *sources,
+        int source_size)
+{
+    dim3 block(256);
+    dim3 grid((source_size+255)/256);
+
+    kernel_particle_to_mesh_map_weight_particles_charge_to_mesh<<<grid,block>>>(
+          spat_mesh_x_n_nodes,
+          spat_mesh_y_n_nodes,
+          spat_mesh_z_n_nodes,
+          spat_mesh_x_cell_size,
+          spat_mesh_y_cell_size,
+          spat_mesh_z_cell_size,
+          spat_mesh_charge_density,
+          sources,
+          source_size);
+
+    assert(cudaGetLastError() == cudaSuccess);
 
     return true;
 }
